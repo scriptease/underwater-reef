@@ -748,10 +748,22 @@ window.FishLayer = (function () {
   var SHARK_GAZE_R = 320, SHARK_CONE_COS = 0.75; // ~41° half-angle
 
   function makeShark() {
-    return { x: 0, y: 0, vx: 0, baseY: 0, face: 1, len: 230, bob: rng() * TAU, state: 'away', timer: 3 + rng() * 4 };
+    return { x: 0, y: 0, vx: 0, baseY: 0, face: 1, len: 230, bob: rng() * TAU, state: 'away', timer: 3 + rng() * 4,
+             dragging: false, grabDX: 0, grabDY: 0 };
   }
 
-  function updateShark(dt, t) {
+  function sharkHit(x, y) {
+    return shark && shark.state === 'cross' &&
+      (x - shark.x) * (x - shark.x) + (y - shark.y) * (y - shark.y) < shark.len * 0.45 * shark.len * 0.45;
+  }
+
+  // cursor hint for the main harness: 'grabbing' | 'grab' | ''
+  function sharkCursor(x, y) {
+    if (shark && shark.dragging) return 'grabbing';
+    return sharkHit(x, y) ? 'grab' : '';
+  }
+
+  function updateShark(dt, t, pointer) {
     if (!shark) return;
     if (shark.state === 'away') {
       shark.timer -= dt;
@@ -763,6 +775,28 @@ window.FishLayer = (function () {
         shark.bob = rng() * TAU;
         shark.state = 'cross';
       }
+      return;
+    }
+    var down = pointer && pointer.down;
+    if (!shark.dragging && down && sharkHit(pointer.x, pointer.y)) {
+      shark.dragging = true;
+      shark.grabDX = shark.x - pointer.x;
+      shark.grabDY = shark.y - pointer.y;
+    }
+    if (shark.dragging && !down) {
+      shark.dragging = false;
+      shark.baseY = clamp(shark.y, 0.12 * H, 0.75 * H);
+      shark.vx = shark.face * (50 + rng() * 25); // resume cruising the way it faces
+    }
+    if (shark.dragging) {
+      // ease toward the pointer so the drag feels like pulling through water
+      var txs = pointer.x + shark.grabDX, tys = pointer.y + shark.grabDY;
+      var k = Math.min(1, dt * 10);
+      var dx = (txs - shark.x) * k;
+      shark.x += dx;
+      shark.y += (tys - shark.y) * k;
+      if (dx > 0.6) shark.face = 1;
+      else if (dx < -0.6) shark.face = -1;
       return;
     }
     shark.x += shark.vx * dt;
@@ -819,7 +853,7 @@ window.FishLayer = (function () {
   function update(dt, t, pointer) {
     if (dt <= 0) return;
     var n = fish.length, i, j, f;
-    updateShark(dt, t);
+    updateShark(dt, t, pointer);
     var sharkHunting = shark && shark.state === 'cross';
     // gaze origin: shark's snout, a bit ahead of center
     var gazeX = sharkHunting ? shark.x + shark.face * shark.len * 0.25 : 0;
@@ -923,8 +957,8 @@ window.FishLayer = (function () {
         var kd2 = kx * kx + ky * ky;
         if (kd2 < SHARK_GAZE_R * SHARK_GAZE_R && kd2 > 1) {
           var kd = Math.sqrt(kd2);
-          // inside the forward cone of the shark's gaze?
-          if ((kx * shark.face) / kd > SHARK_CONE_COS) {
+          // inside the forward gaze cone — or anywhere near a dragged shark
+          if (shark.dragging || (kx * shark.face) / kd > SHARK_CONE_COS) {
             var kprox = 1 - kd / SHARK_GAZE_R;
             // no laziness here — everyone fears the shark
             ax += kx / kd * (kprox * kprox * 1100 + 250);
@@ -1085,7 +1119,7 @@ window.FishLayer = (function () {
     }
   }
 
-  return { init: init, resize: resize, update: update, draw: draw };
+  return { init: init, resize: resize, update: update, draw: draw, sharkCursor: sharkCursor };
 })();
 // Main harness — composes WaterLayer, CoralLayer, FishLayer per CONTRACT.md
 (() => {
@@ -1093,7 +1127,7 @@ window.FishLayer = (function () {
   const canvas = document.getElementById('scene');
   const ctx = canvas.getContext('2d');
   let W = 0, H = 0;
-  const pointer = { x: -9999, y: -9999, active: false };
+  const pointer = { x: -9999, y: -9999, active: false, down: false };
 
   function size() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -1137,13 +1171,14 @@ window.FishLayer = (function () {
 
   const setPtr = (x, y, active) => { pointer.x = x; pointer.y = y; pointer.active = active; };
   window.addEventListener('pointermove', e => setPtr(e.clientX, e.clientY, true));
-  window.addEventListener('pointerdown', e => setPtr(e.clientX, e.clientY, true));
-  window.addEventListener('pointerup', () => { pointer.active = false; });
-  window.addEventListener('pointerleave', () => setPtr(-9999, -9999, false));
+  window.addEventListener('pointerdown', e => { setPtr(e.clientX, e.clientY, true); pointer.down = true; });
+  window.addEventListener('pointerup', () => { pointer.active = false; pointer.down = false; });
+  window.addEventListener('pointercancel', () => { pointer.active = false; pointer.down = false; });
+  window.addEventListener('pointerleave', () => { setPtr(-9999, -9999, false); pointer.down = false; });
   window.addEventListener('touchmove', e => {
-    const t = e.touches[0]; if (t) setPtr(t.clientX, t.clientY, true);
+    const t = e.touches[0]; if (t) { setPtr(t.clientX, t.clientY, true); pointer.down = true; }
   }, { passive: true });
-  window.addEventListener('touchend', () => setPtr(-9999, -9999, false));
+  window.addEventListener('touchend', () => { setPtr(-9999, -9999, false); pointer.down = false; });
 
   let last = performance.now();
   function frame(now) {
@@ -1156,6 +1191,7 @@ window.FishLayer = (function () {
     FishLayer.draw(ctx, t);
     CoralLayer.drawFront(ctx, t);
     WaterLayer.drawOverlay(ctx, t);
+    if (FishLayer.sharkCursor) canvas.style.cursor = FishLayer.sharkCursor(pointer.x, pointer.y);
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
