@@ -679,11 +679,11 @@
   window.CoralLayer = {
     shelters: shelters,
     init: function (w, h) {
-      W = w; H = h; U = h / 900;
+      W = w; H = h; U = Math.min(h, w) / 900;   // portrait: corals follow width
       regenerate();
     },
     resize: function (w, h) {
-      W = w; H = h; U = h / 900;
+      W = w; H = h; U = Math.min(h, w) / 900;
       regenerate();
     },
     drawBack: function (ctx, t) {
