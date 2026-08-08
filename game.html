@@ -1427,22 +1427,27 @@ window.GameLayer = (function () {
           }
         }
         trash.splice(i, 1);
-        score++;
-        popup(tr.x, tr.y, '+1', '#e8c547');
-        if (score % 10 === 0 && hp < MAX_HP) {
-          hp++;
-          popup(sub.x, sub.y - 46, '+1 ♥', '#ff6b81');
-        }
-        // stage progression
-        var next = stage < 3 && score >= STAGE_AT[stage] ? stage + 1 : stage;
-        if (next !== stage) {
-          stage = next;
-          if (stage === 3) makeGlowers();
-          popup(W * 0.5, H * 0.3,
-                stage === 2 ? '🌙 Night falls — keep moving to glow!' : '🐙 The abyss — follow the light!',
-                '#9ed6f7');
-        }
+        scoreTrash(tr.x, tr.y);
       }
+    }
+  }
+
+  // a piece of trash secured (caught sinking, or snatched from a crab)
+  function scoreTrash(x, y) {
+    score++;
+    popup(x, y, '+1', '#e8c547');
+    if (score % 10 === 0 && hp < MAX_HP) {
+      hp++;
+      popup(sub.x, sub.y - 46, '+1 ♥', '#ff6b81');
+    }
+    // stage progression
+    var next = stage < 3 && score >= STAGE_AT[stage] ? stage + 1 : stage;
+    if (next !== stage) {
+      stage = next;
+      if (stage === 3) makeGlowers();
+      popup(W * 0.5, H * 0.3,
+            stage === 2 ? '🌙 Night falls — keep moving to glow!' : '🐙 The abyss — follow the light!',
+            '#9ed6f7');
     }
   }
 
@@ -1792,11 +1797,15 @@ window.GameLayer = (function () {
         return;
       }
     }
-    // crab pinch
+    // crab pinch — but tackling a loaded crab wins its loot back
     for (var c = 0; c < crabs.length; c++) {
       var cx = crabs[c].x - sub.x, cy = crabs[c].y - sub.y;
       var cr = 24 + SUB_R * 0.8;
       if (cx * cx + cy * cy < cr * cr) {
+        if (crabs[c].carrying) {
+          crabs[c].carrying = null;
+          scoreTrash(crabs[c].x, crabs[c].y - 44);
+        }
         hurt(1, sub.x, sub.y - 40, '🦀 −1');
         invuln = 1.3;
         return;
