@@ -267,11 +267,13 @@
     ctx.restore();
   }
 
-  function drawOverlay(ctx, t) {
-    // ---- surface wave band, top ~6% ----
-    var bandH = 0.06 * H;
-    drawWave(ctx, t, bandH * 0.55, bandH * 0.28, 0.9, 22, 'rgba(111,163,189,0.30)');
-    drawWave(ctx, t, bandH * 0.85, bandH * 0.22, -0.6, 34, 'rgba(130,180,205,0.25)');
+  function drawOverlay(ctx, t, showWaves) {
+    // ---- surface wave band, top ~6% (not visible from the abyss) ----
+    if (showWaves !== false) {
+      var bandH = 0.06 * H;
+      drawWave(ctx, t, bandH * 0.55, bandH * 0.28, 0.9, 22, 'rgba(111,163,189,0.30)');
+      drawWave(ctx, t, bandH * 0.85, bandH * 0.22, -0.6, 34, 'rgba(130,180,205,0.25)');
+    }
 
     // ---- bubbles ----
     ctx.fillStyle = 'rgba(220,240,250,0.28)';
@@ -2743,7 +2745,7 @@ window.GameLayer = (function () {
     GameLayer.drawFront(ctx, t);
     CoralLayer.drawFront(ctx, t);
     GameLayer.drawDark(ctx, t);
-    WaterLayer.drawOverlay(ctx, t);
+    WaterLayer.drawOverlay(ctx, t, !abyss);   // no surface waves this deep down
     updateHud();
     requestAnimationFrame(frame);
   }

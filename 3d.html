@@ -24,12 +24,21 @@
     transition: background .15s;
   }
   #mode:hover { background: rgba(255,255,255,.28); }
+  #game {
+    position: fixed; top: 14px; left: 76px; z-index: 10;
+    padding: 9px 18px; border-radius: 999px; text-decoration: none;
+    font: 600 14px/1 -apple-system, "Segoe UI", sans-serif; letter-spacing: .02em;
+    color: #eaf4f9; background: rgba(255,255,255,.16); backdrop-filter: blur(6px);
+    transition: background .15s;
+  }
+  #game:hover { background: rgba(255,255,255,.28); }
 </style>
 </head>
 <body>
 <canvas id="scene"></canvas>
 <button id="reset" title="Regenerate the scene with a new seed">&#8635; New reef</button>
 <a id="mode" href="./" title="Switch to the 2D reef">2D</a>
+<a id="game" href="game.html" title="Play the Sub Cleanup game">&#127918; Game</a>
 <script>
 // LIGHTING — shared cel-shading/fog/caustics GLSL chunk + volumetric god rays.
 // See CONTRACT3D.md. Defines exactly window.LIGHTING = { glsl, init(), drawRays(t) }.
