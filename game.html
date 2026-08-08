@@ -356,6 +356,7 @@
   var frontClusters = [];
   var backItems = [];      // flattened, depth-sorted by base y
   var frontItems = [];
+  var backBaseMaxY = 0;    // lowest back-coral footing, drives the crab lane
   var kelps = [];          // all kelp blades, for the abyss glow pass
   var kelpGlowMode = false; // abyss: kelp drawn in its glow color, in place
 
@@ -754,6 +755,11 @@
     }
     backItems = flatten(backClusters);
     frontItems = flatten(frontClusters);
+    // lowest drawn footing of the background reef — corals grow upward from
+    // their anchor, so anything below this can never overlap a back coral
+    backBaseMaxY = backItems.length
+      ? Math.max.apply(null, backItems.map(function (it) { return it.y + (it.baseExt || 0); }))
+      : H * 0.85;
 
     // collect kelp blades (for the abyss glow pass); half glow at half brightness
     kelps.length = 0;
@@ -789,6 +795,7 @@
       for (var i = 0; i < frontItems.length; i++) drawItem(ctx, frontItems[i], t);
     },
     kelpList: function () { return kelps; },
+    backBaseMaxY: function () { return backBaseMaxY; },
     setKelpGlow: function (on) { kelpGlowMode = !!on; }
   };
 })();
@@ -1521,6 +1528,17 @@ window.GameLayer = (function () {
   }
 
   /* ---------- crabs: scuttle in along the sand, steal trash, pinch the sub ---------- */
+
+  var CRAB_FEET = 13;   // how far the legs reach below the walking line
+
+  // Lane derived from the reef, not a screen fraction: the crab's feet sit a
+  // couple of px below the lowest back-coral footing, so a crab crossing a
+  // back cluster always reads as grounded — on any screen shape and seed.
+  function crabLane() {
+    var footing = window.CoralLayer.backBaseMaxY() + 3;
+    return clamp(footing - CRAB_FEET, H * 0.80, H * 0.93);
+  }
+
   function updateCrabs(dt, t) {
     crabT -= dt;
     if (crabT <= 0 && crabs.length < 2) {
@@ -1535,7 +1553,7 @@ window.GameLayer = (function () {
     }
     for (var i = crabs.length - 1; i >= 0; i--) {
       var c = crabs[i];
-      c.y = H * 0.815 + Math.sin(c.leg * 4) * 1.5;
+      c.y = crabLane() + Math.sin(c.leg * 4) * 1.5;
       c.leg += dt * 3;
       c.x += c.dir * (c.carrying ? 72 : 55) * dt;
       if (!c.carrying) {
