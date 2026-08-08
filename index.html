@@ -298,6 +298,8 @@
   var shelters = [];       // stable array reference, mutated in place
   var backClusters = [];
   var frontClusters = [];
+  var backItems = [];      // flattened, depth-sorted by base y
+  var frontItems = [];
 
   /* ---------- seeded RNG ---------- */
   function mulberry32(a) {
@@ -655,6 +657,19 @@
       if (lx > W * 0.4 && lx < W * 0.62) lx = W * rr(0.88, 0.97);
       frontClusters.push(genLoner(lx, H * rr(0.88, 0.98), toneFront));
     }
+
+    // depth-sort: items rooted lower on the sand are closer, draw on top;
+    // kelp gets a small bias so it stays behind its cluster mates
+    function depthKey(it) { return it.y - (it.kind === 'kelp' ? 14 : 0); }
+    function flatten(clusters) {
+      var out = [];
+      for (var ci = 0; ci < clusters.length; ci++) out = out.concat(clusters[ci].items);
+      out.sort(function (a, b) { return depthKey(a) - depthKey(b); });
+      return out;
+    }
+    backItems = flatten(backClusters);
+    frontItems = flatten(frontClusters);
+
   }
 
   /* ---------- public API ---------- */
@@ -670,16 +685,10 @@
       regenerate();
     },
     drawBack: function (ctx, t) {
-      for (var i = 0; i < backClusters.length; i++) {
-        var items = backClusters[i].items;
-        for (var j = 0; j < items.length; j++) drawItem(ctx, items[j], t);
-      }
+      for (var i = 0; i < backItems.length; i++) drawItem(ctx, backItems[i], t);
     },
     drawFront: function (ctx, t) {
-      for (var i = 0; i < frontClusters.length; i++) {
-        var items = frontClusters[i].items;
-        for (var j = 0; j < items.length; j++) drawItem(ctx, items[j], t);
-      }
+      for (var i = 0; i < frontItems.length; i++) drawItem(ctx, frontItems[i], t);
     }
   };
 })();
