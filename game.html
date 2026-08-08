@@ -1275,7 +1275,7 @@ window.GameLayer = (function () {
 
   var sub, trash, turtle, popups, thrustBubbles, sediment, krill, krillT;
   var crabs, crabT;
-  var hp, score, over, invuln, spawnT, turtleDelay, stage, charge;
+  var hp, score, over, invuln, spawnT, turtleDelay, stage, charge, shield;
   var glowStretch, glowAng, beamAng;
   var keys = { left: false, right: false, up: false, down: false };
   var upImpulse = false;
@@ -1295,7 +1295,7 @@ window.GameLayer = (function () {
     trash = []; popups = []; thrustBubbles = [];
     turtle = null;
     crabs = []; crabT = 7 + Math.random() * 6;
-    hp = MAX_HP; score = 0; over = false;
+    hp = MAX_HP; score = 0; over = false; shield = 0;
     invuln = 0; spawnT = 1.2; turtleDelay = 2.5;
     stage = 1; charge = 0;
     glowStretch = 0; glowAng = 0; beamAng = 0;
@@ -1421,10 +1421,8 @@ window.GameLayer = (function () {
         if (tr.kind === 'bag' && turtle && !turtle.leaving && !turtle.surfacing &&
             tr === firstBag()) {
           turtle.surfacing = true;
-          if (hp < MAX_HP) {
-            hp++;
-            popup(tr.x, tr.y - 26, '🐢 saved! +1 ♥', '#ff6b81');
-          }
+          popup(tr.x, tr.y - 26, '🐢 saved!', '#7fb069');
+          grantHeart(tr.x, tr.y - 48);
         }
         trash.splice(i, 1);
         scoreTrash(tr.x, tr.y);
@@ -1432,14 +1430,26 @@ window.GameLayer = (function () {
     }
   }
 
+  // +1 heart reward; at full health it banks a bubble shield, and with
+  // a shield already stored it pays out points instead
+  function grantHeart(x, y) {
+    if (hp < MAX_HP) {
+      hp++;
+      popup(x, y, '+1 ♥', '#ff6b81');
+    } else if (!shield) {
+      shield = 1;
+      popup(x, y, '🫧 shield!', '#9ed6f7');
+    } else {
+      score += 3;
+      popup(x, y, '+3', '#e8c547');
+    }
+  }
+
   // a piece of trash secured (caught sinking, or snatched from a crab)
   function scoreTrash(x, y) {
     score++;
     popup(x, y, '+1', '#e8c547');
-    if (score % 10 === 0 && hp < MAX_HP) {
-      hp++;
-      popup(sub.x, sub.y - 46, '+1 ♥', '#ff6b81');
-    }
+    if (score % 10 === 0) grantHeart(sub.x, sub.y - 46);
     // stage progression
     var next = stage < 3 && score >= STAGE_AT[stage] ? stage + 1 : stage;
     if (next !== stage) {
@@ -1504,7 +1514,7 @@ window.GameLayer = (function () {
     if (dx > 4) turtle.face = 1; else if (dx < -4) turtle.face = -1;
     if (d < 26) { // turtle eats the bag — bad for the turtle, bad for you
       trash.splice(trash.indexOf(bag), 1);
-      hurt(1, turtle.x, turtle.y - 30, '🐢 ate a bag! −1');
+      hurt(1, turtle.x, turtle.y - 30, '🐢 ate a bag! −1', true);
       turtle.leaving = true;
       turtle.face = turtle.x < W * 0.5 ? -1 : 1;
     }
@@ -1542,7 +1552,7 @@ window.GameLayer = (function () {
       }
       if (c.x < -60 || c.x > W + 60) {
         if (c.carrying) {   // it got away with your trash
-          hurt(1, clamp(c.x, 60, W - 60), c.y - 50, '🦀 stole trash! −1');
+          hurt(1, clamp(c.x, 60, W - 60), c.y - 50, '🦀 stole trash! −1', true);
         }
         crabs.splice(i, 1);
       }
@@ -1765,7 +1775,14 @@ window.GameLayer = (function () {
   }
 
   /* ---------- damage ---------- */
-  function hurt(dmg, x, y, txt) {
+  // penalty=true (stolen trash, eaten bag) bypasses the shield — the
+  // bubble blocks impacts, not consequences
+  function hurt(dmg, x, y, txt, penalty) {
+    if (shield && !penalty) {
+      shield = 0;
+      popup(x, y, '🫧 shield!', '#9ed6f7');
+      return;
+    }
     hp -= dmg;
     popup(x, y, txt || ('−' + dmg), '#ff6b81');
     if (hp <= 0) { hp = 0; over = true; }
@@ -2546,6 +2563,23 @@ window.GameLayer = (function () {
     drawTurtle(ctx, t);
   }
 
+  function drawShield(ctx, t) {
+    if (!shield) return;
+    var wob = Math.sin(t * 2.6) * 2;
+    ctx.strokeStyle = 'rgba(190,235,255,0.65)';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.ellipse(sub.x, sub.y - 4, 60 + wob, 48 - wob * 0.5, 0, 0, TAU);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(190,235,255,0.08)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';    // shine
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(sub.x - 18, sub.y - 22, 34, Math.PI * 1.1, Math.PI * 1.45);
+    ctx.stroke();
+  }
+
   function drawFront(ctx, t) {
     // headlight beam — faint feathered yellow cone from the nose, in every stage
     ctx.save();
@@ -2561,6 +2595,7 @@ window.GameLayer = (function () {
     }
     ctx.restore();
     drawSub(ctx, t);
+    drawShield(ctx, t);
     ctx.font = '700 17px -apple-system, "Segoe UI", sans-serif';
     ctx.textAlign = 'center';
     for (var p = 0; p < popups.length; p++) {
@@ -2601,7 +2636,7 @@ window.GameLayer = (function () {
       return out;
     },
     forceStage: function (s) { stage = clamp(s, 1, 3); charge = 1; if (stage === 3) makeGlowers(); },
-    state: function () { return { hp: hp, maxHp: MAX_HP, score: score, over: over, stage: stage, stageName: STAGE_NAME[stage - 1] }; }
+    state: function () { return { hp: hp, maxHp: MAX_HP, score: score, over: over, stage: stage, stageName: STAGE_NAME[stage - 1], shield: shield }; }
   };
 })();
 // Main harness — water/coral/fish scene + game loop, HUD, keyboard controls.
@@ -2722,18 +2757,20 @@ window.GameLayer = (function () {
   const overEl = document.getElementById('over');
   const finalEl = document.getElementById('final');
   const hintEl = document.getElementById('hint');
-  let lastHp = -1, lastScore = -1, lastStage = -1, shownOver = false;
+  let lastHp = -1, lastScore = -1, lastStage = -1, lastShield = -1, shownOver = false;
 
   setTimeout(() => { hintEl.style.opacity = '0'; }, 9000);
 
   function updateHud() {
     const s = GameLayer.state();
-    if (s.hp !== lastHp) {
+    if (s.hp !== lastHp || s.shield !== lastShield) {
       lastHp = s.hp;
+      lastShield = s.shield;
       let html = '';
       for (let i = 0; i < s.maxHp; i++) {
         html += i < s.hp ? '♥' : '<span class="lost">♥</span>';
       }
+      if (s.shield) html += ' \u{1FAE7}';
       heartsEl.innerHTML = html;
     }
     if (s.score !== lastScore) {
@@ -2791,7 +2828,7 @@ window.GameLayer = (function () {
   const btn = document.getElementById('mute');
   let ctx = null, master = null, muffle = null, droneG = null;
   let out = null, sfx = null, hissBuf = null, engOsc = null, engG = null;
-  let muted = false, timers = [], lastScore = -1, lastHp = -1;
+  let muted = false, timers = [], lastScore = -1, lastHp = -1, lastShield = 0;
   const VOLUME = 0.22;
 
   function build() {
@@ -2896,7 +2933,9 @@ window.GameLayer = (function () {
       const n = Math.min(lastHp - s.hp, 5);
       for (let i = 0; i < n; i++) slash(i * 0.08);
     }
-    lastScore = s.score; lastHp = s.hp;
+    // shield burst: flag drops with hp intact (score guard skips restarts)
+    if (lastShield === 1 && !s.shield && s.hp === lastHp && s.score >= lastScore) plop();
+    lastScore = s.score; lastHp = s.hp; lastShield = s.shield;
     requestAnimationFrame(tick);
   }
 
@@ -2913,6 +2952,29 @@ window.GameLayer = (function () {
       o.connect(g); g.connect(sfx);
       o.start(t0 + dly); o.stop(t0 + dly + 0.45);
     });
+  }
+
+  // bubble shield burst: quick pitch-drop blip + soft washy pop
+  function plop() {
+    const t0 = ctx.currentTime;
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(340, t0);
+    o.frequency.exponentialRampToValueAtTime(90, t0 + 0.09);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.3, t0 + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18);
+    o.connect(g); g.connect(sfx);
+    o.start(t0); o.stop(t0 + 0.2);
+    const src = ctx.createBufferSource(); src.buffer = hissBuf;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 900;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.0001, t0);
+    ng.gain.exponentialRampToValueAtTime(0.09, t0 + 0.01);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
+    src.connect(lp); lp.connect(ng); ng.connect(sfx);
+    src.start(t0); src.stop(t0 + 0.12);
   }
 
   // heart lost: swept noise slash + low thump; dly staggers burst voices,
