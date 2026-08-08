@@ -431,7 +431,7 @@
     limb(0, 0, -Math.PI / 2 + rr(-0.15, 0.15), s * 0.38, s * 0.085, ri(3, 4) - 1);
     var base = pick(['#e2725b', '#c95d63']);
     return {
-      kind: 'branch', body: body,
+      kind: 'branch', body: body, baseExt: s * 0.085,
       colBody: tone(base), colShade: darkOf(base, tone),
       off: [s * 0.05, s * 0.03],
       swayAmp: 0.035, swayFreq: rr(0.9, 1.6), swayPhase: rr(0, 6.28), alpha: 1
@@ -442,17 +442,19 @@
     var body = new Path2D();
     var openings = [];
     var n = ri(3, 6);
+    var maxW = 0;
     for (var i = 0; i < n; i++) {
       var x = (i - (n - 1) / 2) * s * 0.24 + rr(-s * 0.04, s * 0.04);
       var h = s * rr(0.45, 1.0);
       var w = s * rr(0.09, 0.14);
+      if (w > maxW) maxW = w;
       var lean = rr(-s * 0.08, s * 0.08);
       capsule(body, x, 0, x + lean, -h, w, w * 0.85);
       openings.push({ x: x + lean, y: -h, rx: w * 0.6, ry: w * 0.32 });
     }
     var base = pick(['#f0a35e', '#9b6b9e']);
     return {
-      kind: 'tube', body: body, openings: openings,
+      kind: 'tube', body: body, openings: openings, baseExt: maxW,
       colBody: tone(base), colShade: darkOf(base, tone),
       colDetail: darkOf(base, tone),
       off: [s * 0.05, 0],
@@ -539,7 +541,7 @@
     }
     var base = pick(['#f0a35e', '#e2725b']);
     return {
-      kind: 'anemone', body: body, tents: tents,
+      kind: 'anemone', body: body, tents: tents, baseExt: s * 0.04,
       colBody: darkOf(base, tone), colShade: darkOf(base, tone), // blob = dark tone
       colTent: tone(base),
       off: [s * 0.05, 0],
@@ -726,7 +728,7 @@
 
     // depth-sort: items rooted lower on the sand are closer, draw on top;
     // kelp gets a small bias so it stays behind its cluster mates
-    function depthKey(it) { return it.y - (it.kind === 'kelp' ? 14 : 0); }
+    function depthKey(it) { return it.y + (it.baseExt || 0) - (it.kind === 'kelp' ? 14 : 0); }
     function flatten(clusters) {
       var out = [];
       for (var ci = 0; ci < clusters.length; ci++) out = out.concat(clusters[ci].items);
