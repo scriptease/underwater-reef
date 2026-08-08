@@ -2882,7 +2882,11 @@ window.GameLayer = (function () {
     engOsc.frequency.setTargetAtTime(55 + Math.min(m.speed, 280) * 0.1, now, 0.12);
     const s = GameLayer.state();
     if (lastScore >= 0 && s.score > lastScore) pling();
-    if (lastHp >= 0 && s.hp < lastHp) slash();   // restarts only raise hp, so no false hit
+    if (lastHp >= 0 && s.hp < lastHp) {          // restarts only raise hp, so no false hit
+      // one slash per heart lost — a shark hit sounds like five, staggered
+      const n = Math.min(lastHp - s.hp, 5);
+      for (let i = 0; i < n; i++) slash(i * 0.08);
+    }
     lastScore = s.score; lastHp = s.hp;
     requestAnimationFrame(tick);
   }
@@ -2902,9 +2906,10 @@ window.GameLayer = (function () {
     });
   }
 
-  // heart lost: swept noise slash + low thump
-  function slash() {
-    const t0 = ctx.currentTime;
+  // heart lost: swept noise slash + low thump; dly staggers burst voices,
+  // and every call builds its own bandpass so overlaps don't retrigger
+  function slash(dly) {
+    const t0 = ctx.currentTime + (dly || 0);
     const src = ctx.createBufferSource(); src.buffer = hissBuf;
     const bp = ctx.createBiquadFilter();
     bp.type = 'bandpass'; bp.Q.value = 1.1;
