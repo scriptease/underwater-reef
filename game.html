@@ -341,6 +341,7 @@
   var backItems = [];      // flattened, depth-sorted by base y
   var frontItems = [];
   var kelps = [];          // all kelp blades, for the abyss glow pass
+  var kelpGlowMode = false; // abyss: kelp drawn in its glow color, in place
 
   /* ---------- seeded RNG ---------- */
   function mulberry32(a) {
@@ -571,7 +572,7 @@
       it.px[i] = Math.sin(t * it.freq + it.phase - p * 2.4) * it.amp * p * p;
       it.py[i] = -p * it.h;
     }
-    ctx.fillStyle = it.colBody;
+    ctx.fillStyle = kelpGlowMode && it.glowCol ? it.glowCol : it.colBody;
     ctx.beginPath();
     ctx.moveTo(it.x + it.px[0] - it.w, it.y);
     for (i = 1; i <= n; i++) {
@@ -746,6 +747,7 @@
       for (var j = 0; j < its.length; j++) {
         if (its[j].kind === 'kelp') {
           its[j].glowF = kelps.length % 2 === 0 ? 1 : 0.5;
+          its[j].glowCol = its[j].glowF === 1 ? '#54e6b8' : '#357f68';
           kelps.push(its[j]);
         }
       }
@@ -771,19 +773,7 @@
       for (var i = 0; i < frontItems.length; i++) drawItem(ctx, frontItems[i], t);
     },
     kelpList: function () { return kelps; },
-    // redraw all kelp additively in a bioluminescent tone (abyss glow)
-    drawKelpGlow: function (ctx, t, alpha) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      for (var i = 0; i < kelps.length; i++) {
-        var it = kelps[i], old = it.colBody;
-        ctx.globalAlpha = alpha * it.glowF;
-        it.colBody = '#4fe0b0';
-        drawKelpBlade(ctx, it, t);
-        it.colBody = old;
-      }
-      ctx.restore();
-    }
+    setKelpGlow: function (on) { kelpGlowMode = !!on; }
   };
 })();
 // FishLayer — flat cartoon fish with steering behaviors, coral visits, pointer avoidance.
@@ -2471,9 +2461,9 @@ window.GameLayer = (function () {
         var pulse = 1 + 0.12 * Math.sin(t * 2 + g.ph);
         punchHole(d, p.x, p.y, g.glowR * pulse, 0.92);
       }
-      var ks = window.CoralLayer.kelpList();     // kelp sheds a faint light
+      var ks = window.CoralLayer.kelpList();     // kelp sheds light through the dark
       for (var kk = 0; kk < ks.length; kk++) {
-        punchHole(d, ks[kk].x, ks[kk].y - ks[kk].h * 0.55, ks[kk].h * 0.7, 0.35 * ks[kk].glowF);
+        punchHole(d, ks[kk].x, ks[kk].y - ks[kk].h * 0.55, ks[kk].h * 0.7, 0.55 * ks[kk].glowF);
       }
     }
     d.globalCompositeOperation = 'source-over';
@@ -2504,7 +2494,6 @@ window.GameLayer = (function () {
       }
       ctx.restore();
     } else {
-      window.CoralLayer.drawKelpGlow(ctx, t, 0.35 + 0.12 * Math.sin(t * 1.5));
       drawGlowers(ctx, t);  // light emitters stay visible above the dark
     }
   }
@@ -2744,6 +2733,7 @@ window.GameLayer = (function () {
     const dt = Math.min((now - last) / 1000, 0.05);
     last = now;
     const abyss = GameLayer.state().stage === 3;
+    CoralLayer.setKelpGlow(abyss);
     WaterLayer.drawBackground(ctx, t,
       abyss ? '#755d64' : null,   // abyss sand: darker brown, purplish cast
       abyss ? '#5a464f' : null);
