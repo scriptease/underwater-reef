@@ -1307,12 +1307,16 @@ window.GameLayer = (function () {
   var sub, trash, turtle, popups, thrustBubbles, sediment, krill, krillT;
   var crabs, crabT;
   var hp, score, over, invuln, spawnT, turtleDelay, stage, charge, shield;
+  // trash counted toward the next stage shift; resets to zero on every
+  // shift, natural or manual, so a pill click sticks and each stage
+  // costs STAGE_NEED — matching the old (12, 24) ladder in natural play
+  var stageProg;
   var glowStretch, glowAng, beamAng;
   var keys = { left: false, right: false, up: false, down: false };
   var upImpulse = false;
 
   var MAX_HP = 10, SUB_R = 26, CATCH_R = 48;
-  var STAGE_AT = [0, 12, 24];                 // score thresholds for stages 1..3
+  var STAGE_NEED = 12;                        // trash per stage shift
   var STAGE_NAME = ['Day', 'Night', 'Abyss'];
 
   function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
@@ -1326,7 +1330,7 @@ window.GameLayer = (function () {
     trash = []; popups = []; thrustBubbles = [];
     turtle = null;
     crabs = []; crabT = 7 + Math.random() * 6;
-    hp = MAX_HP; score = 0; over = false; shield = 0;
+    hp = MAX_HP; score = 0; stageProg = 0; over = false; shield = 0;
     invuln = 0; spawnT = 1.2; turtleDelay = 2.5;
     stage = 1; charge = 0;
     glowStretch = 0; glowAng = 0; beamAng = 0;
@@ -1479,12 +1483,14 @@ window.GameLayer = (function () {
   // a piece of trash secured (caught sinking, or snatched from a crab)
   function scoreTrash(x, y) {
     score++;
+    stageProg++;
     popup(x, y, '+1', '#e8c547');
     if (score % 10 === 0) grantHeart(sub.x, sub.y - 46);
     // stage progression
-    var next = stage < 3 && score >= STAGE_AT[stage] ? stage + 1 : stage;
+    var next = stage < 3 && stageProg >= STAGE_NEED ? stage + 1 : stage;
     if (next !== stage) {
       stage = next;
+      stageProg = 0;
       if (stage === 3) makeGlowers();
       popup(W * 0.5, H * 0.3,
             stage === 2 ? '🌙 Night falls — keep moving to glow!' : '🐙 The abyss — follow the light!',
@@ -2685,7 +2691,12 @@ window.GameLayer = (function () {
       for (var i = 0; i < crabs.length; i++) out.push({ x: crabs[i].x, y: crabs[i].y, r: 130 });
       return out;
     },
-    forceStage: function (s) { stage = clamp(s, 1, 3); charge = 1; if (stage === 3) makeGlowers(); },
+    forceStage: function (s) {
+      stage = clamp(s, 1, 3);
+      stageProg = 0;   // a manual choice sticks; progression restarts from here
+      charge = 1;
+      if (stage === 3) makeGlowers();
+    },
     state: function () { return { hp: hp, maxHp: MAX_HP, score: score, over: over, stage: stage, stageName: STAGE_NAME[stage - 1], shield: shield }; }
   };
 })();
