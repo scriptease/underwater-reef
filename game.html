@@ -1422,6 +1422,7 @@ window.GameLayer = (function () {
     if (g >= 1000) unlock('trash1000');
     if (run.trash[0] + run.trash[1] + run.trash[2] >= 100) unlock('run100');
     if (kind === 'duck') unlock('duck1');
+    if (kind === 'pylon') unlock('pylon1');
     if (glob.kinds.length >= 10) unlock('hoarder');
     if (run.kinds.length >= 10) unlock('sweep');
   }
@@ -3040,6 +3041,7 @@ window.GameLayer = (function () {
     ['koAbyss',  'Abyss Avenger',     'KO a shark down in the abyss'],
     ['crab1',    'Mugging the Mugger', 'Reclaim stolen trash from a crab'],
     ['duck1',    'Duck Duck Go',      'Catch the rubber duck'],
+    ['pylon1',   'VLC',               'Catch the Very Lost Cone'],
     ['bitten2',  '’Tis but a Scratch!', 'Survive two shark bites in one run — just a flesh wound'],
     ['hoarder',  'One of Everything', 'Collect all 10 kinds of trash'],
     ['sweep',    'Clean Sweep',       'All 10 kinds of trash in one run'],
