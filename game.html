@@ -1386,6 +1386,7 @@ window.GameLayer = (function () {
   }
   var run = blankCounters();    // current run, in-memory only
   var heartsLost = 0;           // any hp lost this run (untouched-run feats)
+  var sharkBites = 0;           // unshielded shark bites survived this run
   var armed = false;            // night gate armed: next contact descends
   var descent = null;           // { by, shielded } of this run's gated descent
   var toasts = [];              // freshly unlocked ids, drained by the DOM toast queue
@@ -1394,6 +1395,7 @@ window.GameLayer = (function () {
   function resetRun() {
     run = blankCounters();
     heartsLost = 0;
+    sharkBites = 0;
     armed = false;
     descent = null;
   }
@@ -1985,6 +1987,10 @@ window.GameLayer = (function () {
     heartsLost += dmg;
     popup(x, y, txt || ('−' + dmg), '#ff6b81');
     if (hp <= 0) { hp = 0; over = true; return; }   // death beats descent
+    if (by === 'shark') {          // survived a raw bite; two in one run = Twice Shy
+      sharkBites++;
+      if (sharkBites >= 2) unlock('bitten2');
+    }
     if (armed && stage === 2 && !penalty && by) descend(by, false);
   }
 
@@ -3028,6 +3034,7 @@ window.GameLayer = (function () {
     ['koAbyss',  'Abyss Avenger',     'KO a shark down in the abyss'],
     ['crab1',    'Crab Mugger',       'Reclaim stolen trash from a crab'],
     ['duck1',    'Duck Collector',    'Catch the rubber duck'],
+    ['bitten2',  'Twice Shy',         'Survive two shark bites in one run'],
     ['hoarder',  'One of Everything', 'Collect all 10 kinds of trash'],
     ['sweep',    'Clean Sweep',       'All 10 kinds of trash in one run'],
     ['secret',   '???',               '???'],
