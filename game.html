@@ -933,6 +933,16 @@ window.FishLayer = (function () {
       else if (dx < -0.6) shark.face = -1;
       return;
     }
+    if (shark.state === 'ko') {           // belly-up, sinking out of the scene
+      shark.vy += 260 * dt;
+      shark.y += shark.vy * dt;
+      shark.x += shark.vx * 0.3 * dt;
+      if (shark.y > H + shark.len) {
+        shark.state = 'away';
+        shark.timer = 9 + rng() * 7;       // a KO'd shark sulks a while
+      }
+      return;
+    }
     shark.x += shark.vx * dt;
     shark.y = shark.baseY + Math.sin(t * 0.5 + shark.bob) * 18;
     if ((shark.face === 1 && shark.x > W + shark.len) ||
@@ -942,14 +952,27 @@ window.FishLayer = (function () {
     }
   }
 
+  // shield-tackled: flip belly-up with a little upward pop, then sink away
+  function koShark() {
+    if (shark && shark.state === 'cross') {
+      shark.state = 'ko';
+      shark.vy = -90;
+    }
+  }
+
   function drawShark(ctx, t) {
-    if (!shark || shark.state !== 'cross') return;
+    if (!shark || (shark.state !== 'cross' && shark.state !== 'ko')) return;
     var img = window.SHARK_IMG;
     if (!img || !img.complete || !img.naturalWidth) return;
     ctx.save();
     ctx.translate(shark.x, shark.y);
-    ctx.rotate(Math.cos(t * 0.5 + shark.bob) * 0.04);
-    ctx.scale(-shark.face, 1); // artwork faces left; flip when swimming right
+    if (shark.state === 'ko') {
+      ctx.rotate(Math.sin(t * 2.2) * 0.1);
+      ctx.scale(-shark.face, -1);          // belly-up
+    } else {
+      ctx.rotate(Math.cos(t * 0.5 + shark.bob) * 0.04);
+      ctx.scale(-shark.face, 1); // artwork faces left; flip when swimming right
+    }
     ctx.drawImage(img, -shark.len / 2, -shark.len / 2, shark.len, shark.len);
     ctx.restore();
   }
@@ -1272,7 +1295,8 @@ window.FishLayer = (function () {
 
   return { init: init, resize: resize, update: update, draw: draw, sharkCursor: sharkCursor,
            fishList: function () { return fish; },
-           getShark: function () { return shark; } };
+           getShark: function () { return shark; },
+           koShark: koShark };
 })();
 // GameLayer — submarine, sinking trash, hungry turtle, health & score.
 window.GameLayer = (function () {
@@ -1864,8 +1888,16 @@ window.GameLayer = (function () {
       var sx = sh.x - sub.x, sy = sh.y - sub.y;
       var sr = sh.len * 0.36 + SUB_R * 0.8;
       if (sx * sx + sy * sy < sr * sr) {
-        hurt(5, sub.x, sub.y - 40, '−5 shark!');
-        invuln = 2.2;
+        if (shield) {                       // revenge of the overachiever
+          shield = 0;
+          popup(sub.x, sub.y - 40, '🫧 shield!', '#9ed6f7');
+          popup(sh.x, sh.y - sh.len * 0.35, '💫 revenge!', '#e8c547');
+          fishLayer.koShark();
+          invuln = 1.3;
+        } else {
+          hurt(5, sub.x, sub.y - 40, '−5 shark!');
+          invuln = 2.2;
+        }
       }
     }
   }
