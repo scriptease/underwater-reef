@@ -3088,11 +3088,12 @@ window.GameLayer = (function () {
     const prog = GameLayer.progress();
     document.getElementById('badges-title').innerHTML =
       '\u{1F3C6} Achievements \u00b7 ' + unlockedCount() + ' / ' + BADGES.length;
+    const n = (c, word) => c + ' ' + (c === 1 ? word : word + 's');
     document.getElementById('badge-stats').textContent =
       sum3(prog.globals.trash).toLocaleString() + ' trash collected \u00b7 ' +
-      sum3(prog.globals.sharks) + ' sharks KO\u2019d \u00b7 ' +
-      sum3(prog.globals.rescues) + ' turtles saved \u00b7 ' +
-      sum3(prog.globals.crabs) + ' crabs harassed';
+      n(sum3(prog.globals.sharks), 'shark') + ' KO\u2019d \u00b7 ' +
+      n(sum3(prog.globals.rescues), 'turtle') + ' saved \u00b7 ' +
+      n(sum3(prog.globals.crabs), 'crab') + ' harassed';
     const list = document.getElementById('badge-list');
     list.innerHTML = '';
     for (const [id, name, desc] of BADGES) {
