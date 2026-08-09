@@ -1621,8 +1621,7 @@ window.GameLayer = (function () {
       popup(x, y, '🫧 shield!', '#9ed6f7');
       recShield();
     } else {
-      score += 3;
-      popup(x, y, '+3', '#e8c547');
+      popup(x, y, '👑 maxed out!', '#e8c547');   // hearts and shield both full
     }
   }
 
@@ -2857,7 +2856,7 @@ window.GameLayer = (function () {
     },
     drainToasts: function () { var t = toasts; toasts = []; return t; },
     progress: function () { return { unlocked: unlocked, run: run, globals: glob }; },
-    state: function () { return { hp: hp, maxHp: MAX_HP, score: score, over: over, stage: stage, stageName: STAGE_NAME[stage - 1], shield: shield }; }
+    state: function () { return { hp: hp, maxHp: MAX_HP, score: score, over: over, stage: stage, stageName: STAGE_NAME[stage - 1], shield: shield, prog: stageProg, need: STAGE_NEED, armed: armed }; }
   };
 })();
 // Main harness — water/coral/fish scene + game loop, HUD, keyboard controls.
@@ -2998,9 +2997,12 @@ window.GameLayer = (function () {
       lastScore = s.score;
       scoreEl.textContent = '\u{1F5D1} ' + s.score;
     }
-    if (s.stage !== lastStage) {
-      lastStage = s.stage;
-      stageEl.textContent = s.stageName;
+    const pill = s.stage === 3 ? s.stageName
+               : s.armed ? s.stageName + ' · 🌊'
+               : s.stageName + ' · ' + Math.min(s.prog, s.need) + '/' + s.need;
+    if (pill !== lastStage) {
+      lastStage = pill;
+      stageEl.textContent = pill;
     }
     for (const id of GameLayer.drainToasts()) toastQ.push(id);
     showNextToast();
