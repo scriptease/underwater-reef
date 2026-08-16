@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Aquarium Simulation</title>
+<style>
+  html, body { margin:0; padding:0; overflow:hidden; background:#02121f; height:100%; }
+  canvas { display:block; width:100vw; height:100vh; cursor:none; }
+  #hint {
+    position:fixed; bottom:12px; left:50%; transform:translateX(-50%);
+    color:rgba(255,255,255,.45); font-family:sans-serif; font-size:13px;
+    pointer-events:none; user-select:none; transition:opacity 2s;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint">move your mouse — the fish will avoid it</div>
+<script>
+(() => {
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H;
+
+// ---------- utils ----------
+const rand = (a, b) => a + Math.random() * (b - a);
+const randInt = (a, b) => Math.floor(rand(a, b + 1));
+const lerp = (a, b, t) => a + (b - a) * t;
+
+// ---------- resize / static layers ----------
+let bgLayer, sandLayer; // offscreen canvases for static scenery
+function makeLayer() {
+  bgLayer = document.createElement('canvas');
+  sandLayer = document.createElement('canvas');
+  bgLayer.width = sandLayer.width = W;
+  bgLayer.height = sandLayer.height = H;
+}
+
+function buildBackground() {
+  const g = bgLayer.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#0b4f73');
+  grad.addColorStop(0.35, '#083a5c');
+  grad.addColorStop(0.7, '#052a46');
+  grad.addColorStop(1, '#031b30');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, W, H);
+
+  // distant blurry rocks / silhouette for depth
+  g.fillStyle = 'rgba(2, 20, 38, 0.5)';
+  for (let i = 0; i < 6; i++) {
+    const x = rand(0, W), y = H * rand(0.55, 0.9), r = rand(80, 220);
+    g.beginPath();
+    g.ellipse(x, y + r * 0.4, r, r * 0.6, 0, 0, Math.PI * 2);
+    g.fill();
+  }
+}
+
+function sandTopY(x) { // wavy sand surface line
+  return H - 55 + Math.sin(x * 0.012) * 7 + Math.sin(x * 0.037 + 2) * 4;
+}
+
+// ---------- coral generation (drawn once onto sand layer) ----------
+function drawBranchCoral(g, x, y, color) {
+  const branch = (bx, by, angle, len, depth) => {
+    if (depth === 0 || len < 6) return;
+    const nx = bx + Math.cos(angle) * len;
+    const ny = by + Math.sin(angle) * len;
+    g.strokeStyle = color;
+    g.lineCap = 'round';
+    g.lineWidth = depth * 1.4;
+    g.beginPath(); g.moveTo(bx, by); g.lineTo(nx, ny); g.stroke();
+    // tip polyps
+    if (depth <= 2) {
+      g.fillStyle = 'rgba(255,255,255,0.35)';
+      g.beginPath(); g.arc(nx, ny, depth * 1.1, 0, Math.PI * 2); g.fill();
+    }
+    const n = randInt(2, 3);
+    for (let i = 0; i < n; i++)
+      branch(nx, ny, angle + rand(-0.9, 0.9), len * rand(0.6, 0.8), depth - 1);
+  };
+  g.save(); g.translate(x, y);
+  branch(0, 0, -Math.PI / 2, rand(24, 36), 5);
+  g.restore();
+}
+
+function drawFanCoral(g, x, y, color) {
+  const r = rand(35, 65);
+  g.strokeStyle = color;
+  g.lineCap = 'round';
+  for (let i = 0; i < 22; i++) {
+    const a = -Math.PI + rand(-0.28, 0.28) * Math.PI / 3;
+    const rr = r * rand(0.75, 1);
+    g.lineWidth = 1.5;
+    g.beginPath();
+    g.moveTo(x, y);
+    g.quadraticCurveTo(x + Math.cos(a) * rr * 0.6, y + Math.sin(a) * rr * 0.6,
+                       x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+    g.stroke();
+  }
+  // rim dots
+  g.fillStyle = 'rgba(255,255,255,0.4)';
+  for (let i = 0; i < 18; i++) {
+    const a = -Math.PI + rand(-0.26, 0.26) * Math.PI / 3;
+    g.beginPath();
+    g.arc(x + Math.cos(a) * r, y + Math.sin(a) * r, 1.6, 0, Math.PI * 2);
+    g.fill();
+  }
+}
+
+function drawTubeSponge(g, x, y, color) {
+  const n = randInt(4, 8);
+  for (let i = 0; i < n; i++) {
+    const tx = x + rand(-26, 26), h = rand(26, 70), w = rand(7, 12);
+    g.fillStyle = color;
+    g.beginPath();
+    g.moveTo(tx - w / 2, y);
+    g.lineTo(tx + w / 2, y);
+    g.lineTo(tx + w / 2 - 1.5, y - h);
+    g.lineTo(tx - w / 2 + 1.5, y - h);
+    g.closePath(); g.fill();
+    // opening
+    g.fillStyle = 'rgba(0,0,0,0.45)';
+    g.beginPath(); g.ellipse(tx, y - h, w / 2 - 1.5, 3, 0, 0, Math.PI * 2); g.fill();
+  }
+}
+
+function drawBrainCoral(g, x, y, color) {
+  const r = rand(28, 55);
+  g.fillStyle = color;
+  g.beginPath();
+  g.arc(x, y + 4, r, Math.PI, 0);
+  g.closePath(); g.fill();
+  // grooves
+  g.strokeStyle = 'rgba(0,0,0,0.3)';
+  g.lineWidth = 2;
+  for (let i = -3; i <= 3; i++) {
+    g.beginPath();
+    for (let t = 0; t <= 1; t += 0.05) {
+      const px = x + (t - 0.5) * r * 1.8;
+      const py = y + 4 - Math.sqrt(Math.max(0, r * r - (px - x) ** 2)) +
+                 Math.sin(t * 9 + i) * 3;
+      t === 0 ? g.moveTo(px, py) : g.lineTo(px, py);
+    }
+    g.stroke();
+  }
+}
+
+function buildSand() {
+  const g = sandLayer.getContext('2d');
+  g.clearRect(0, 0, W, H);
+
+  // sand body with wavy top
+  g.beginPath();
+  g.moveTo(0, H);
+  for (let x = 0; x <= W; x += 8) g.lineTo(x, sandTopY(x));
+  g.lineTo(W, H);
+  g.closePath();
+  const grad = g.createLinearGradient(0, H - 90, 0, H);
+  grad.addColorStop(0, '#c9a86a');
+  grad.addColorStop(0.4, '#a5854f');
+  grad.addColorStop(1, '#5e4a2c');
+  g.fillStyle = grad;
+  g.fill();
+
+  // sand speckles
+  for (let i = 0; i < W * H / 900; i++) {
+    const x = rand(0, W), y = rand(sandTopY(x) + 4, H);
+    g.fillStyle = Math.random() > 0.5 ? 'rgba(255,235,190,0.18)' : 'rgba(40,28,12,0.25)';
+    g.fillRect(x, y, rand(1, 2.5), rand(1, 2));
+  }
+
+  // coral shadows on sand (soft ellipses)
+  const corals = [];
+  const nCorals = Math.max(6, Math.floor(W / 180));
+  for (let i = 0; i < nCorals; i++) {
+    const x = rand(30, W - 30), y = sandTopY(x) + rand(-2, 4);
+    corals.push({ x, y });
+    g.fillStyle = 'rgba(15, 10, 4, 0.28)';
+    g.beginPath();
+    g.ellipse(x, y + 6, rand(30, 60), 9, 0, 0, Math.PI * 2);
+    g.fill();
+  }
+
+  // corals themselves
+  const palettes = ['#ff7eb3', '#ff9f5a', '#c86bdc', '#f4587c', '#ffb347'];
+  for (const c of corals) {
+    const type = randInt(0, 3);
+    if (type === 0) drawBranchCoral(g, c.x, c.y + 4, palettes[randInt(0, palettes.length - 1)]);
+    else if (type === 1) drawFanCoral(g, c.x, c.y + 6, palettes[randInt(0, palettes.length - 1)]);
+    else if (type === 2) drawTubeSponge(g, c.x, c.y + 8, '#7ec4d1');
+    else drawBrainCoral(g, c.x, c.y + 8, '#e8b34b');
+  }
+
+  // kelp anchors (drawn live for sway)
+  window.kelps = [];
+  const nKelp = Math.max(3, Math.floor(W / 260));
+  for (let i = 0; i < nKelp; i++) {
+    const x = rand(40, W - 40);
+    kelps.push({ x, y: sandTopY(x) + 6, h: rand(90, 170), phase: rand(0, 6.28), w: rand(5, 8) });
+    g.fillStyle = 'rgba(15,10,4,0.25)';
+    g.beginPath(); g.ellipse(x, sandTopY(x) + 10, 26, 7, 0, 0, Math.PI * 2); g.fill();
+  }
+
+  // ambient shading: darken bottom edges & corners of sand (light from above)
+  const shade = g.createRadialGradient(W / 2, H * 0.35, W * 0.2, W / 2, H * 0.8, W * 0.9);
+  shade.addColorStop(0, 'rgba(0,0,0,0)');
+  shade.addColorStop(1, 'rgba(0,10,25,0.55)');
+  g.fillStyle = shade;
+  g.fillRect(0, H - 160, W, 160);
+
+  // vertical light shafts falling ON the sand (bright patches)
+  for (let i = 0; i < 4; i++) {
+    const x = rand(0, W);
+    g.fillStyle = 'rgba(255, 250, 210, 0.06)';
+    g.beginPath();
+    g.ellipse(x, H - 30, rand(60, 140), 16, 0, 0, Math.PI * 2);
+    g.fill();
+  }
+}
+
+// ---------- light rays ----------
+const rays = [];
+function initRays() {
+  rays.length = 0;
+  const n = Math.max(4, Math.floor(W / 260));
+  for (let i = 0; i < n; i++) {
+    rays.push({
+      x: rand(0, W), wTop: rand(30, 90), len: H * rand(0.55, 0.95),
+      spread: rand(60, 140), speed: rand(0.15, 0.4), phase: rand(0, 6.28),
+      drift: rand(-14, 14)
+    });
+  }
+}
+
+function drawRays(t) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  for (const r of rays) {
+    const sway = Math.sin(t * r.speed + r.phase) * r.drift;
+    const x = r.x + sway;
+    const a = 0.05 + 0.035 * Math.sin(t * r.speed * 1.7 + r.phase);
+    const grad = ctx.createLinearGradient(0, 0, 0, r.len);
+    grad.addColorStop(0, `rgba(200, 240, 255, ${a * 2})`);
+    grad.addColorStop(1, 'rgba(200, 240, 255, 0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(x - r.wTop / 2, -10);
+    ctx.lineTo(x + r.wTop / 2, -10);
+    ctx.lineTo(x + r.wTop / 2 + r.spread, r.len);
+    ctx.lineTo(x - r.wTop / 2 - r.spread, r.len);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ---------- kelp (swaying) ----------
+function drawKelps(t) {
+  for (const k of window.kelps || []) {
+    const segs = 14;
+    ctx.strokeStyle = '#2e7d3a';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = k.w;
+    ctx.beginPath();
+    let px = k.x, py = k.y;
+    for (let i = 1; i <= segs; i++) {
+      const f = i / segs;
+      const nx = k.x + Math.sin(t * 0.8 + k.phase + f * 2.4) * f * 26;
+      const ny = k.y - f * k.h;
+      ctx.lineWidth = k.w * (1 - f * 0.75);
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(nx, ny); ctx.stroke();
+      px = nx; py = ny;
+    }
+    // leaves
+    for (let i = 3; i < segs; i += 2) {
+      const f = i / segs;
+      const lx = k.x + Math.sin(t * 0.8 + k.phase + f * 2.4) * f * 26;
+      const ly = k.y - f * k.h;
+      ctx.fillStyle = 'rgba(76,175,80,0.85)';
+      ctx.beginPath();
+      ctx.ellipse(lx + (i % 4 ? 10 : -10), ly, 13, 4.5, i % 4 ? 0.4 : -0.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+// ---------- fish (boids) ----------
+const mouse = { x: -9999, y: -9999 };
+class Fish {
+  constructor() {
+    this.x = rand(0, W);
+    this.y = rand(H * 0.15, H * 0.82);
+    const a = rand(0, Math.PI * 2);
+    this.vx = Math.cos(a) * 1.5;
+    this.vy = Math.sin(a) * 1.5;
+    this.size = rand(7, 14);
+    this.phase = rand(0, 6.28);
+    const palettes = [
+      ['#ffd166', '#f4a340'], ['#ff6b6b', '#d63c5e'], ['#5ad1e8', '#2a9fc9'],
+      ['#c792ea', '#8e5cd9'], ['#7ee08a', '#3fa35c'], ['#ffe066', '#f2b53c']
+    ];
+    const p = palettes[randInt(0, palettes.length - 1)];
+    this.body = p[0]; this.belly = p[1];
+  }
+
+  update(fish, t) {
+    let sx = 0, sy = 0, ax = 0, ay = 0, cx = 0, cy = 0, n = 0;
+    const R = 55, R2 = R * R;
+    for (const o of fish) {
+      if (o === this) continue;
+      const dx = o.x - this.x, dy = o.y - this.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < R2) {
+        n++;
+        ax += o.vx; ay += o.vy;          // alignment
+        cx += o.x; cy += o.y;            // cohesion
+        if (d2 < 900 && d2 > 0.01) {     // separation (close range)
+          const d = Math.sqrt(d2);
+          sx -= dx / d * (30 - d) / 30 * 0.6;
+          sy -= dy / d * (30 - d) / 30 * 0.6;
+        }
+      }
+    }
+    if (n > 0) {
+      this.vx += (ax / n - this.vx) * 0.04 + sx;
+      this.vy += (ay / n - this.vy) * 0.04 + sy;
+      this.vx += (cx / n - this.x) * 0.0015;
+      this.vy += (cy / n - this.y) * 0.0015;
+    }
+
+    // avoid mouse
+    const mdx = this.x - mouse.x, mdy = this.y - mouse.y;
+    const md2 = mdx * mdx + mdy * mdy;
+    if (md2 < 140 * 140 && md2 > 1) {
+      const md = Math.sqrt(md2);
+      const f = (140 - md) / 140 * 0.9;
+      this.vx += mdx / md * f;
+      this.vy += mdy / md * f;
+    }
+
+    // keep in bounds (soft steering)
+    const M = 60, B = sandTopY(this.x) - 25;
+    if (this.x < M) this.vx += (M - this.x) * 0.004;
+    if (this.x > W - M) this.vx -= (this.x - (W - M)) * 0.004;
+    if (this.y < M * 0.8) this.vy += (M * 0.8 - this.y) * 0.004;
+    if (this.y > B) this.vy -= (this.y - B) * 0.005;
+
+    // speed limits
+    const sp = Math.hypot(this.vx, this.vy);
+    const max = 2.6 + Math.sin(t * 3 + this.phase) * 0.3;
+    if (sp > max) { this.vx = this.vx / sp * max; this.vy = this.vy / sp * max; }
+    if (sp < 0.8 && sp > 0) { this.vx = this.vx / sp * 0.8; this.vy = this.vy / sp * 0.8; }
+
+    this.x += this.vx;
+    this.y += this.vy;
+  }
+
+  draw(t) {
+    const ang = Math.atan2(this.vy, this.vx);
+    const s = this.size;
+    const wiggle = Math.sin(t * 10 + this.phase) * 0.35;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(ang);
+
+    // tail
+    ctx.fillStyle = this.belly;
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.6, 0);
+    ctx.lineTo(-s * 1.5, -s * 0.7 + wiggle * s);
+    ctx.lineTo(-s * 1.5, s * 0.7 + wiggle * s);
+    ctx.closePath();
+    ctx.fill();
+
+    // body
+    const grad = ctx.createLinearGradient(0, -s, 0, s);
+    grad.addColorStop(0, this.body);
+    grad.addColorStop(1, this.belly);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, s, s * 0.52, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // dorsal fin
+    ctx.fillStyle = this.belly;
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.15, -s * 0.4);
+    ctx.lineTo(s * 0.15, -s * 0.85 + wiggle * s * 0.5);
+    ctx.lineTo(s * 0.3, -s * 0.35);
+    ctx.closePath();
+    ctx.fill();
+
+    // eye
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(s * 0.55, -s * 0.12, s * 0.14, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#111';
+    ctx.beginPath(); ctx.arc(s * 0.58, -s * 0.12, s * 0.07, 0, Math.PI * 2); ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+let fish = [];
+function initFish() {
+  const n = Math.max(30, Math.min(90, Math.floor(W / 16)));
+  fish = [];
+  for (let i = 0; i < n; i++) fish.push(new Fish());
+}
+
+// ---------- bubbles ----------
+const bubbles = [];
+function initBubbles() {
+  bubbles.length = 0;
+  for (let i = 0; i < 25; i++)
+    bubbles.push({ x: rand(0, W), y: rand(0, H), r: rand(1.5, 5), v: rand(0.3, 1), phase: rand(0, 6.28) });
+}
+function updateBubbles(t) {
+  for (const b of bubbles) {
+    b.y -= b.v;
+    b.x += Math.sin(t * 2 + b.phase) * 0.3;
+    if (b.y < -10) { b.y = H + 10; b.x = rand(0, W); }
+  }
+}
+function drawBubbles() {
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  for (const b of bubbles) {
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fill(); ctx.stroke();
+  }
+}
+
+// ---------- main loop ----------
+let last = performance.now();
+function frame(now) {
+  const t = now / 1000;
+  ctx.drawImage(bgLayer, 0, 0);
+  drawRays(t);
+  drawKelps(t);
+  for (const f of fish) f.update(fish, t);
+  for (const f of fish) f.draw(t);
+  ctx.drawImage(sandLayer, 0, 0);   // sand + corals in front of lower fish
+  updateBubbles(t);
+  drawBubbles();
+
+  // subtle vignette
+  const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.45, W / 2, H / 2, Math.max(W, H) * 0.75);
+  v.addColorStop(0, 'rgba(0,0,0,0)');
+  v.addColorStop(1, 'rgba(0,8,20,0.4)');
+  ctx.fillStyle = v;
+  ctx.fillRect(0, 0, W, H);
+
+  requestAnimationFrame(frame);
+}
+
+// ---------- setup ----------
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  makeLayer();
+  buildBackground();
+  buildSand();
+  initRays();
+  initFish();
+  initBubbles();
+}
+
+window.addEventListener('resize', resize);
+canvas.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+canvas.addEventListener('mouseleave', () => { mouse.x = -9999; mouse.y = -9999; });
+setTimeout(() => document.getElementById('hint').style.opacity = 0, 6000);
+
+resize();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

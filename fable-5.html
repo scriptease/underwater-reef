@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reef — an aquarium simulation</title>
+<style>
+  html, body { margin:0; height:100%; background:#04101d; overflow:hidden; }
+  canvas { display:block; width:100vw; height:100vh; }
+  #hint {
+    position:fixed; bottom:14px; left:50%; transform:translateX(-50%);
+    color:rgba(210,235,255,.5); font:13px/1.4 system-ui, sans-serif;
+    letter-spacing:.02em; pointer-events:none; user-select:none;
+    transition:opacity 1.5s ease;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint">touch the water — the fish remember where you were</div>
+<script>
+(() => {
+'use strict';
+
+// ---------- deterministic RNG (mulberry32) ----------
+// One seed builds the whole reef; the render loop never calls random.
+let SEED = 20260816;
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+let R = mulberry32(SEED);
+const rand = (a, b) => a + R() * (b - a);
+const randInt = (a, b) => Math.floor(rand(a, b + 1));
+const pick = arr => arr[randInt(0, arr.length - 1)];
+const TAU = Math.PI * 2;
+
+// ---------- canvas / DPR ----------
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+
+const reduceMotion = typeof matchMedia === 'function'
+  && matchMedia('(prefers-reduced-motion: reduce)').matches;
+const TIME_SCALE = reduceMotion ? 0.25 : 1;
+
+// ---------- offscreen layers ----------
+let bgLayer, sandLayer, causticTile;
+
+function newLayer(w, h) {
+  const l = document.createElement('canvas');
+  l.width = w; l.height = h;
+  return l;
+}
+
+// ---------- scenery ----------
+function sandTopY(x) {
+  return H - H * 0.085
+    + Math.sin(x * 0.010) * 8
+    + Math.sin(x * 0.031 + 2.2) * 4;
+}
+
+function buildBackground() {
+  const g = bgLayer.getContext('2d');
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+  // twilight water column
+  const grad = g.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0.00, '#0d5a7d');
+  grad.addColorStop(0.30, '#0a4364');
+  grad.addColorStop(0.62, '#06304b');
+  grad.addColorStop(1.00, '#041c30');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, W, H);
+
+  // far reef silhouettes: two depth bands, lighter behind, darker in front
+  const band = (baseY, amp, color, roughness) => {
+    g.fillStyle = color;
+    g.beginPath();
+    g.moveTo(0, H);
+    for (let x = 0; x <= W; x += 6) {
+      const y = baseY
+        + Math.sin(x * 0.004 + roughness) * amp
+        + Math.sin(x * 0.013 + roughness * 3) * amp * 0.45
+        + Math.sin(x * 0.041 + roughness * 7) * amp * 0.15;
+      g.lineTo(x, y);
+    }
+    g.lineTo(W, H);
+    g.closePath();
+    g.fill();
+  };
+  band(H * 0.68, H * 0.06, 'rgba(9, 44, 66, 0.85)', rand(0, 6));
+  band(H * 0.80, H * 0.05, 'rgba(5, 28, 45, 0.95)', rand(0, 6));
+
+  // faint plankton motes, baked (they don't need to move to work)
+  for (let i = 0; i < W / 14; i++) {
+    g.fillStyle = `rgba(190, 225, 245, ${rand(0.02, 0.07)})`;
+    g.beginPath();
+    g.arc(rand(0, W), rand(0, H * 0.85), rand(0.5, 1.6), 0, TAU);
+    g.fill();
+  }
+}
+
+// ---------- corals (baked into sand layer) ----------
+function drawBranchCoral(g, x, y, color) {
+  const branch = (bx, by, angle, len, depth) => {
+    if (depth === 0 || len < 5) return;
+    const nx = bx + Math.cos(angle) * len;
+    const ny = by + Math.sin(angle) * len;
+    g.strokeStyle = color;
+    g.lineCap = 'round';
+    g.lineWidth = depth * 1.5;
+    g.beginPath(); g.moveTo(bx, by); g.lineTo(nx, ny); g.stroke();
+    if (depth <= 2) { // polyp tips
+      g.fillStyle = 'rgba(255,246,230,0.5)';
+      g.beginPath(); g.arc(nx, ny, depth * 1.2, 0, TAU); g.fill();
+    }
+    const kids = randInt(2, 3);
+    for (let i = 0; i < kids; i++)
+      branch(nx, ny, angle + rand(-0.85, 0.85), len * rand(0.62, 0.78), depth - 1);
+  };
+  branch(x, y, -Math.PI / 2 + rand(-0.2, 0.2), rand(22, 34), 5);
+}
+
+function drawFanCoral(g, x, y, color) {
+  const r = rand(38, 66);
+  const lean = rand(-0.25, 0.25);
+  g.strokeStyle = color;
+  g.lineCap = 'round';
+  g.lineWidth = 1.4;
+  const ribs = 24;
+  for (let i = 0; i < ribs; i++) {
+    const a = -Math.PI / 2 + lean + (i / (ribs - 1) - 0.5) * 1.5;
+    const rr = r * (0.8 + 0.2 * Math.sin(i * 2.1));
+    g.beginPath();
+    g.moveTo(x, y);
+    g.quadraticCurveTo(
+      x + Math.cos(a) * rr * 0.5, y + Math.sin(a) * rr * 0.55,
+      x + Math.cos(a) * rr,       y + Math.sin(a) * rr
+    );
+    g.stroke();
+  }
+  // lateral lattice threads
+  g.lineWidth = 0.7;
+  g.strokeStyle = color;
+  for (let ring = 0.45; ring < 1; ring += 0.18) {
+    g.beginPath();
+    for (let i = 0; i < ribs; i += 1) {
+      const a = -Math.PI / 2 + lean + (i / (ribs - 1) - 0.5) * 1.5;
+      const px = x + Math.cos(a) * r * ring;
+      const py = y + Math.sin(a) * r * ring;
+      i === 0 ? g.moveTo(px, py) : g.lineTo(px, py);
+    }
+    g.stroke();
+  }
+}
+
+function drawTubeSponge(g, x, y, color) {
+  const n = randInt(3, 6);
+  for (let i = 0; i < n; i++) {
+    const tx = x + rand(-24, 24), h = rand(28, 66), w = rand(8, 13);
+    const lean = rand(-3, 3);
+    const grad = g.createLinearGradient(tx - w, y, tx + w, y);
+    grad.addColorStop(0, color);
+    grad.addColorStop(0.5, '#a7dbe4');
+    grad.addColorStop(1, color);
+    g.fillStyle = grad;
+    g.beginPath();
+    g.moveTo(tx - w / 2, y);
+    g.quadraticCurveTo(tx - w / 2 + lean, y - h / 2, tx - w / 2 + lean + 1.5, y - h);
+    g.lineTo(tx + w / 2 + lean - 1.5, y - h);
+    g.quadraticCurveTo(tx + w / 2 + lean, y - h / 2, tx + w / 2, y);
+    g.closePath(); g.fill();
+    g.fillStyle = 'rgba(6, 18, 26, 0.6)'; // osculum
+    g.beginPath(); g.ellipse(tx + lean, y - h, w / 2 - 1.5, 2.6, 0, 0, TAU); g.fill();
+  }
+}
+
+function drawBrainCoral(g, x, y, color) {
+  const r = rand(30, 52);
+  const dome = g.createRadialGradient(x - r * 0.3, y - r * 0.5, r * 0.2, x, y, r);
+  dome.addColorStop(0, '#f3cf7e');
+  dome.addColorStop(1, color);
+  g.fillStyle = dome;
+  g.beginPath(); g.arc(x, y + 3, r, Math.PI, 0); g.closePath(); g.fill();
+  // meandering grooves clipped to the dome
+  g.save();
+  g.beginPath(); g.arc(x, y + 3, r - 1, Math.PI, 0); g.closePath(); g.clip();
+  g.strokeStyle = 'rgba(90, 55, 20, 0.45)';
+  g.lineWidth = 1.8;
+  for (let i = -4; i <= 4; i++) {
+    g.beginPath();
+    for (let t = 0; t <= 1.001; t += 0.04) {
+      const px = x + (t - 0.5) * r * 1.9;
+      const dy = Math.sqrt(Math.max(0, r * r - (px - x) ** 2));
+      const py = y + 3 - dy * (0.35 + 0.11 * (i + 4))
+        + Math.sin(t * 11 + i * 1.7) * 2.6
+        + Math.sin(t * 23 + i) * 1.1;
+      t === 0 ? g.moveTo(px, py) : g.lineTo(px, py);
+    }
+    g.stroke();
+  }
+  g.restore();
+}
+
+// kelp state (anchors baked; blades drawn live for sway)
+let kelps = [];
+
+function buildSand() {
+  const g = sandLayer.getContext('2d');
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.clearRect(0, 0, W, H);
+
+  // sand body
+  g.beginPath();
+  g.moveTo(0, H);
+  for (let x = 0; x <= W; x += 8) g.lineTo(x, sandTopY(x));
+  g.lineTo(W, H);
+  g.closePath();
+  const grad = g.createLinearGradient(0, H - H * 0.14, 0, H);
+  grad.addColorStop(0, '#cfae76');
+  grad.addColorStop(0.45, '#a2854e');
+  grad.addColorStop(1, '#4a3a22');
+  g.fillStyle = grad;
+  g.fill();
+
+  // speckle
+  const speckles = Math.floor(W * 0.9);
+  for (let i = 0; i < speckles; i++) {
+    const x = rand(0, W), y = rand(sandTopY(x) + 3, H);
+    g.fillStyle = R() > 0.5 ? 'rgba(255,238,200,0.16)' : 'rgba(46,32,14,0.22)';
+    g.fillRect(x, y, rand(1, 2.4), rand(1, 2));
+  }
+
+  // ripple lines following the surface
+  g.strokeStyle = 'rgba(60, 44, 20, 0.18)';
+  g.lineWidth = 1;
+  for (let row = 1; row <= 3; row++) {
+    g.beginPath();
+    for (let x = 0; x <= W; x += 10)
+      g.lineTo(x, sandTopY(x) + row * 13 + Math.sin(x * 0.05 + row) * 2);
+    g.stroke();
+  }
+
+  // place corals, kelp, and their shade
+  kelps = [];
+  const corals = [];
+  const nCorals = Math.max(6, Math.floor(W / 170));
+  for (let i = 0; i < nCorals; i++)
+    corals.push({ x: rand(30, W - 30), type: i % 4 }); // guarantee all four kinds
+  const nKelp = Math.max(3, Math.floor(W / 300));
+  for (let i = 0; i < nKelp; i++) {
+    const x = rand(40, W - 40);
+    kelps.push({ x, y: sandTopY(x) + 4, h: rand(H * 0.12, H * 0.22),
+                 phase: rand(0, TAU), w: rand(4.5, 7.5), segs: 12 });
+  }
+
+  // ambient-occlusion shade first, so growth sits on top of its own shadow
+  for (const c of corals) {
+    const y = sandTopY(c.x);
+    g.fillStyle = 'rgba(12, 9, 4, 0.32)';
+    g.beginPath(); g.ellipse(c.x + 8, y + 7, rand(30, 55), 8, 0, 0, TAU); g.fill();
+  }
+  for (const k of kelps) {
+    g.fillStyle = 'rgba(12, 9, 4, 0.26)';
+    g.beginPath(); g.ellipse(k.x + 6, k.y + 6, 24, 6, 0, 0, TAU); g.fill();
+  }
+
+  const warm = ['#ff7a8a', '#e0a34c', '#ff9264', '#e4577d'];
+  for (const c of corals) {
+    const y = sandTopY(c.x) + 4;
+    if (c.type === 0)      drawBranchCoral(g, c.x, y, pick(warm));
+    else if (c.type === 1) drawFanCoral(g, c.x, y + 2, pick(['#9f6bd8', '#c86bdc', '#e4577d']));
+    else if (c.type === 2) drawTubeSponge(g, c.x, y + 4, '#6fc3cf');
+    else                   drawBrainCoral(g, c.x, y + 4, '#d99a3e');
+  }
+
+  // deepen the bottom corners: light comes from above, so edges fall away
+  const shade = g.createLinearGradient(0, H - H * 0.2, 0, H);
+  shade.addColorStop(0, 'rgba(0,0,0,0)');
+  shade.addColorStop(1, 'rgba(2, 8, 16, 0.55)');
+  g.fillStyle = shade;
+  g.fillRect(0, H - H * 0.2, W, H * 0.2);
+}
+
+// ---------- caustics: one baked tile, two drifting copies at draw time ----------
+function buildCaustics() {
+  const size = 256;
+  causticTile = newLayer(size, size);
+  const g = causticTile.getContext('2d');
+  g.clearRect(0, 0, size, size);
+  g.strokeStyle = 'rgba(255, 244, 205, 0.5)';
+  g.lineWidth = 1.6;
+  // wobbly closed cells, drawn to tile seamlessly by wrapping phase in TAU
+  for (let cy = 0; cy < 4; cy++) {
+    for (let cx = 0; cx < 4; cx++) {
+      const ox = cx * 64 + 32, oy = cy * 64 + 32;
+      const p1 = rand(0, TAU), p2 = rand(0, TAU);
+      g.beginPath();
+      for (let a = 0; a <= TAU + 0.1; a += 0.25) {
+        const rr = 20 + Math.sin(a * 3 + p1) * 6 + Math.sin(a * 5 + p2) * 4;
+        const px = ox + Math.cos(a) * rr;
+        const py = oy + Math.sin(a) * rr * 0.6;
+        a === 0 ? g.moveTo(px, py) : g.lineTo(px, py);
+      }
+      g.stroke();
+    }
+  }
+}
+
+function drawCaustics(t) {
+  const y0 = H - H * 0.11;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  for (let x = 0; x <= W; x += 8) ctx.lineTo(x, sandTopY(x) - 2);
+  ctx.lineTo(W, H);
+  ctx.closePath();
+  ctx.clip();
+  ctx.globalCompositeOperation = 'overlay';
+  const s = 256;
+  for (let pass = 0; pass < 2; pass++) {
+    const speed = pass ? 11 : -7;
+    const off = ((t * speed) % s + s) % s;
+    ctx.globalAlpha = pass ? 0.20 : 0.26;
+    for (let x = -s; x < W + s; x += s)
+      for (let y = y0 - s; y < H; y += s)
+        ctx.drawImage(causticTile, x + (pass ? off : -off), y + Math.sin(t * 0.4 + x) * 3, s, s * 0.5);
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+// ---------- light rays ----------
+let rays = [];
+function initRays() {
+  rays = [];
+  const n = Math.max(4, Math.floor(W / 280));
+  for (let i = 0; i < n; i++) {
+    rays.push({
+      x: rand(0, W), wTop: rand(26, 80), len: H * rand(0.6, 0.98),
+      spread: rand(60, 150), speed: rand(0.12, 0.35) * TIME_SCALE,
+      phase: rand(0, TAU), drift: rand(-16, 16)
+    });
+  }
+}
+
+function drawRays(t) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  for (const r of rays) {
+    const x = r.x + Math.sin(t * r.speed + r.phase) * r.drift;
+    const a = 0.045 + 0.03 * Math.sin(t * r.speed * 1.6 + r.phase);
+    const grad = ctx.createLinearGradient(0, 0, 0, r.len);
+    grad.addColorStop(0, `rgba(255, 233, 184, ${a * 2.2})`);
+    grad.addColorStop(1, 'rgba(255, 233, 184, 0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(x - r.wTop / 2, -10);
+    ctx.lineTo(x + r.wTop / 2, -10);
+    ctx.lineTo(x + r.wTop / 2 + r.spread, r.len);
+    ctx.lineTo(x - r.wTop / 2 - r.spread, r.len);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ---------- kelp ----------
+function drawKelps(t) {
+  for (const k of kelps) {
+    let px = k.x, py = k.y;
+    for (let i = 1; i <= k.segs; i++) {
+      const f = i / k.segs;
+      const nx = k.x + Math.sin(t * 0.7 * TIME_SCALE + k.phase + f * 2.2) * f * 24;
+      const ny = k.y - f * k.h;
+      ctx.strokeStyle = i % 2 ? '#2c7a3c' : '#35914a';
+      ctx.lineCap = 'round';
+      ctx.lineWidth = k.w * (1 - f * 0.72);
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(nx, ny); ctx.stroke();
+      if (i > 2 && i % 2) { // alternating blades
+        ctx.fillStyle = 'rgba(84, 178, 96, 0.85)';
+        ctx.beginPath();
+        ctx.ellipse(nx + (i % 4 ? 9 : -9), ny, 11, 4, i % 4 ? 0.45 : -0.45, 0, TAU);
+        ctx.fill();
+      }
+      px = nx; py = ny;
+    }
+  }
+}
+
+// ---------- fish: three schools, spatial hash boids ----------
+// Pointer memory: fish avoid where you touched for a few seconds, fading.
+const pointer = { x: -1e4, y: -1e4, strength: 0 };
+
+const SCHOOL_DEFS = [
+  { body: '#ffd166', belly: '#e8913a', depth: 1.00 },  // near: golden
+  { body: '#ff6b7d', belly: '#c23a5e', depth: 1.00 },  // near: coral red
+  { body: '#5ad1e8', belly: '#2a7fb0', depth: 0.62 },  // far: teal, smaller & dimmer
+];
+
+class Fish {
+  constructor(school, def) {
+    this.school = school;
+    this.depth = def.depth;
+    this.x = rand(0, W);
+    this.y = rand(H * 0.12, H * 0.78);
+    const a = rand(0, TAU);
+    const v = rand(1.2, 1.8);
+    this.vx = Math.cos(a) * v;
+    this.vy = Math.sin(a) * v;
+    this.size = rand(7, 13) * def.depth;
+    this.phase = rand(0, TAU);
+    this.body = def.body;
+    this.belly = def.belly;
+    this.grad = null; // built lazily once per fish, reused every frame
+  }
+
+  makeGradient() {
+    const s = this.size;
+    const g = ctx.createLinearGradient(0, -s, 0, s);
+    g.addColorStop(0, this.body);
+    g.addColorStop(1, this.belly);
+    this.grad = g;
+  }
+
+  draw(t) {
+    const ang = Math.atan2(this.vy, this.vx);
+    const s = this.size;
+    const wig = Math.sin(t * 9 * TIME_SCALE + this.phase) * 0.35;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(ang);
+    ctx.globalAlpha = 0.55 + 0.45 * this.depth; // distance haze
+
+    // tail
+    ctx.fillStyle = this.belly;
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.6, 0);
+    ctx.lineTo(-s * 1.45, -s * 0.65 + wig * s);
+    ctx.lineTo(-s * 1.45,  s * 0.65 + wig * s);
+    ctx.closePath();
+    ctx.fill();
+
+    // body
+    if (!this.grad) this.makeGradient();
+    ctx.fillStyle = this.grad;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, s, s * 0.5, 0, 0, TAU);
+    ctx.fill();
+
+    // dorsal fin
+    ctx.fillStyle = this.belly;
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.1, -s * 0.38);
+    ctx.lineTo( s * 0.15, -s * 0.8 + wig * s * 0.4);
+    ctx.lineTo( s * 0.32, -s * 0.32);
+    ctx.closePath();
+    ctx.fill();
+
+    // eye
+    ctx.fillStyle = '#f4fbff';
+    ctx.beginPath(); ctx.arc(s * 0.55, -s * 0.1, s * 0.13, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#0a1016';
+    ctx.beginPath(); ctx.arc(s * 0.58, -s * 0.1, s * 0.065, 0, TAU); ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+let fish = [];
+function initFish() {
+  fish = [];
+  const per = Math.max(14, Math.min(34, Math.floor(W / 46)));
+  SCHOOL_DEFS.forEach((def, si) => {
+    for (let i = 0; i < per; i++) fish.push(new Fish(si, def));
+  });
+}
+
+// spatial hash: rebuild each frame, query 3x3 neighborhood
+const CELL = 64;
+function boidsStep(t) {
+  const grid = new Map();
+  for (let i = 0; i < fish.length; i++) {
+    const f = fish[i];
+    const key = ((f.x / CELL) | 0) + ',' + ((f.y / CELL) | 0);
+    (grid.get(key) || grid.set(key, []).get(key)).push(f);
+  }
+
+  const R2 = 55 * 55, SEP2 = 28 * 28;
+  for (const f of fish) {
+    let sx = 0, sy = 0, ax = 0, ay = 0, cx = 0, cy = 0, n = 0;
+    const gx = (f.x / CELL) | 0, gy = (f.y / CELL) | 0;
+    for (let ix = gx - 1; ix <= gx + 1; ix++) {
+      for (let iy = gy - 1; iy <= gy + 1; iy++) {
+        const bucket = grid.get(ix + ',' + iy);
+        if (!bucket) continue;
+        for (const o of bucket) {
+          if (o === f || o.school !== f.school) continue;
+          const dx = o.x - f.x, dy = o.y - f.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 > R2) continue;
+          n++;
+          ax += o.vx; ay += o.vy;
+          cx += o.x;  cy += o.y;
+          if (d2 < SEP2 && d2 > 0.01) {
+            const d = Math.sqrt(d2);
+            const push = (28 - d) / 28 * 0.55;
+            sx -= dx / d * push;
+            sy -= dy / d * push;
+          }
+        }
+      }
+    }
+    if (n > 0) {
+      f.vx += (ax / n - f.vx) * 0.045 + sx;
+      f.vy += (ay / n - f.vy) * 0.045 + sy;
+      f.vx += (cx / n - f.x) * 0.0016;
+      f.vy += (cy / n - f.y) * 0.0016;
+    }
+
+    // pointer memory: avoidance strength decays after release
+    if (pointer.strength > 0.01) {
+      const dx = f.x - pointer.x, dy = f.y - pointer.y;
+      const d2 = dx * dx + dy * dy;
+      const RANGE = 150;
+      if (d2 < RANGE * RANGE && d2 > 1) {
+        const d = Math.sqrt(d2);
+        const push = (RANGE - d) / RANGE * 0.95 * pointer.strength;
+        f.vx += dx / d * push;
+        f.vy += dy / d * push;
+      }
+    }
+
+    // soft walls; sand is the floor
+    const M = 60, B = sandTopY(f.x) - 22;
+    if (f.x < M)      f.vx += (M - f.x) * 0.004;
+    if (f.x > W - M)  f.vx -= (f.x - (W - M)) * 0.004;
+    if (f.y < M * 0.7) f.vy += (M * 0.7 - f.y) * 0.004;
+    if (f.y > B)      f.vy -= (f.y - B) * 0.006;
+
+    // speed envelope with a breathing pulse per fish
+    const sp = Math.hypot(f.vx, f.vy) || 0.001;
+    const max = (2.4 + Math.sin(t * 2.6 * TIME_SCALE + f.phase) * 0.3) * TIME_SCALE + (1 - TIME_SCALE) * 0.6;
+    const min = 0.7 * TIME_SCALE + 0.15;
+    if (sp > max) { f.vx = f.vx / sp * max; f.vy = f.vy / sp * max; }
+    else if (sp < min) { f.vx = f.vx / sp * min; f.vy = f.vy / sp * min; }
+
+    f.x += f.vx;
+    f.y += f.vy;
+  }
+}
+
+// ---------- bubbles (positions seeded, motion deterministic) ----------
+let bubbles = [];
+function initBubbles() {
+  bubbles = [];
+  const n = 22;
+  for (let i = 0; i < n; i++)
+    bubbles.push({ x: rand(0, W), y: rand(0, H), r: rand(1.4, 4.6),
+                   v: rand(0.35, 1.0) * TIME_SCALE + 0.1, phase: rand(0, TAU),
+                   respawnX: rand(0, W) });
+}
+function drawBubbles(t) {
+  ctx.strokeStyle = 'rgba(235, 250, 255, 0.4)';
+  ctx.fillStyle = 'rgba(235, 250, 255, 0.09)';
+  ctx.lineWidth = 1;
+  for (const b of bubbles) {
+    b.y -= b.v;
+    if (b.y < -8) { b.y = H + 8; const nx = b.respawnX; b.respawnX = b.x; b.x = nx; }
+    const x = b.x + Math.sin(t * 1.8 * TIME_SCALE + b.phase) * 4;
+    ctx.beginPath(); ctx.arc(x, b.y, b.r, 0, TAU);
+    ctx.fill(); ctx.stroke();
+    // glint
+    ctx.beginPath(); ctx.arc(x - b.r * 0.3, b.y - b.r * 0.3, b.r * 0.25, 0, TAU);
+    ctx.stroke();
+  }
+}
+
+// ---------- vignette (baked, not rebuilt per frame) ----------
+let vignette;
+function buildVignette() {
+  vignette = newLayer(canvas.width, canvas.height);
+  const g = vignette.getContext('2d');
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const v = g.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.42, W / 2, H / 2, Math.max(W, H) * 0.72);
+  v.addColorStop(0, 'rgba(0,0,0,0)');
+  v.addColorStop(1, 'rgba(1, 8, 18, 0.42)');
+  g.fillStyle = v;
+  g.fillRect(0, 0, W, H);
+}
+
+// ---------- main loop ----------
+function frame(now) {
+  const t = now / 1000;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+  ctx.drawImage(bgLayer, 0, 0, W, H);
+  drawRays(t);
+
+  boidsStep(t);
+  // far school behind the sand line's growth, near schools in front
+  for (const f of fish) if (f.depth < 1) f.draw(t);
+  drawKelps(t);
+  for (const f of fish) if (f.depth >= 1) f.draw(t);
+
+  ctx.drawImage(sandLayer, 0, 0, W, H);
+  drawCaustics(t);
+  drawBubbles(t);
+
+  ctx.drawImage(vignette, 0, 0, W, H);
+
+  pointer.strength *= 0.985; // the fish slowly forget
+
+  requestAnimationFrame(frame);
+}
+
+// ---------- input ----------
+function setPointer(e) {
+  const p = e.touches ? e.touches[0] : e;
+  pointer.x = p.clientX; pointer.y = p.clientY;
+  pointer.strength = 1;
+}
+canvas.addEventListener('pointerdown', setPointer);
+canvas.addEventListener('pointermove', e => { if (pointer.strength > 0.01) setPointer(e); });
+canvas.addEventListener('pointerup',   () => { /* memory decays on its own */ });
+
+// ---------- setup / resize ----------
+function resize() {
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width  = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+
+  R = mulberry32(SEED);           // same seed -> same reef at any size
+  bgLayer   = newLayer(canvas.width, canvas.height);
+  sandLayer = newLayer(canvas.width, canvas.height);
+  buildBackground();
+  buildSand();
+  buildCaustics();
+  buildVignette();
+  initRays();
+  initFish();
+  initBubbles();
+}
+
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(resize, 120);
+});
+
+setTimeout(() => { document.getElementById('hint').style.opacity = '0'; }, 7000);
+
+resize();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

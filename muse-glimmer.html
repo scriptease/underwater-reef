@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Aquarium Swarm</title>
+<style>
+  html,body{margin:0;height:100%;background:#00111a;overflow:hidden;font-family:system-ui,sans-serif}
+  canvas{display:block}
+  #hint{
+    position:fixed;left:50%;top:16px;transform:translateX(-50%);
+    color:#cfefff;background:rgba(0,20,30,.6);backdrop-filter:blur(4px);
+    padding:8px 14px;border-radius:999px;font-size:14px;pointer-events:none;
+    opacity:.9
+  }
+</style>
+</head>
+<body>
+<div id="hint">Tap / click to scare the fish into the reef</div>
+<canvas id="c"></canvas>
+<script>
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+let W,H,bottomH=160;
+let fishes=[],shelters=[],reefs=[],bubbles=[];
+let hidingActive=false,hideEnd=0;
+
+function resize(){
+  W=canvas.width=innerWidth;
+  H=canvas.height=innerHeight;
+  buildReef();
+}
+window.addEventListener('resize',resize);
+
+function buildReef(){
+  reefs=[];shelters=[];
+  const step=80;
+  for(let x=-step;x<W+step;x+=step){
+    const h=60+Math.random()*100;
+    const y=H-bottomH - Math.random()*40;
+    reefs.push({x:x+step/2,y,w:70,h});
+    shelters.push({x:x+step/2+ (Math.random()-0.5)*30, y:y+h*0.6, r:35});
+  }
+}
+function randColor(){
+  return `hsl(${190+Math.random()*80},70%,${55+Math.random()*15}%)`;
+}
+
+class Fish{
+  constructor(){
+    this.x=Math.random()*W;
+    this.y=Math.random()*(H-bottomH-120)+80;
+    this.vx=(Math.random()-0.5)*1.5;
+    this.vy=(Math.random()-0.5)*1.2;
+    this.size=10+Math.random()*14;
+    this.color=randColor();
+    this.hiding=false; this.target=null;
+  }
+  seek(tx,ty){
+    const dx=tx-this.x, dy=ty-this.y;
+    const d=Math.hypot(dx,dy)||1;
+    const ax=dx/d*0.08, ay=dy/d*0.08;
+    this.vx+=ax; this.vy+=ay;
+    this.limit();
+  }
+  limit(){
+    const s=Math.hypot(this.vx,this.vy);
+    const max=2.2;
+    if(s>max){this.vx=this.vx/s*max;this.vy=this.vy/s*max;}
+  }
+  boids(others){
+    let sepX=0,sepY=0,aliX=0,aliY=0,cohX=0,cohY=0;
+    let count=0;
+    for(const o of others){
+      if(o===this) continue;
+      const dx=this.x-o.x, dy=this.y-o.y;
+      const d=Math.hypot(dx,dy);
+      if(d<80 && d>0){
+        if(d<30){sepX+=dx/d; sepY+=dy/d;}
+        aliX+=o.vx; aliY+=o.vy;
+        cohX+=o.x; cohY+=o.y;
+        count++;
+      }
+    }
+    if(count){
+      aliX/=count; aliY/=count;
+      this.vx+=(aliX-this.vx)*0.02;
+      this.vy+=(aliY-this.vy)*0.02;
+      cohX/=count; cohY/=count;
+      this.vx+=(cohX-this.x)*0.001;
+      this.vy+=(cohY-this.y)*0.001;
+      this.vx+=sepX*0.03; this.vy+=sepY*0.03;
+    }else{
+      // wander
+      this.vx+= (Math.random()-0.5)*0.02;
+      this.vy+= (Math.random()-0.5)*0.02;
+    }
+    this.limit();
+  }
+  update(others){
+    if(hidingActive){
+      if(!this.hiding){
+        // pick nearest shelter
+        let best=shelters[0],bd=1e9;
+        for(const s of shelters){
+          const d=Math.hypot(s.x-this.x,s.y-this.y);
+          if(d<bd){bd=d;best=s;}
+        }
+        this.target=best;
+        this.hiding=true;
+      }
+      this.seek(this.target.x+ (Math.random()-0.5)*10, this.target.y+ (Math.random()-0.5)*10);
+    }else{
+      if(this.hiding){
+        this.hiding=false; this.target=null;
+        this.vx=(Math.random()-0.5)*1.5;
+        this.vy=(Math.random()-0.5)*1.2;
+      }
+      this.boids(others);
+    }
+    this.x+=this.vx; this.y+=this.vy;
+
+    // soft bounds
+    if(this.y<40){this.y=40;this.vy=Math.abs(this.vy);}
+    if(this.y>H-bottomH-20){this.y=H-bottomH-20;this.vy=-Math.abs(this.vy)*0.5;}
+    if(this.x<-20){this.x=W+20;} if(this.x>W+20){this.x=-20;}
+  }
+  draw(){
+    const ang=Math.atan2(this.vy,this.vx);
+    ctx.save();
+    ctx.translate(this.x,this.y);
+    ctx.rotate(ang);
+    ctx.fillStyle=this.color;
+    // body
+    ctx.beginPath();
+    ctx.ellipse(0,0,this.size*0.9,this.size*0.6,0,0,Math.PI*2);
+    ctx.fill();
+    // tail
+    ctx.beginPath();
+    ctx.moveTo(-this.size*0.9,0);
+    ctx.lineTo(-this.size*1.4,-this.size*0.5);
+    ctx.lineTo(-this.size*1.4,this.size*0.5);
+    ctx.closePath();
+    ctx.fillStyle=this.color;
+    ctx.globalAlpha=0.9;ctx.fill();ctx.globalAlpha=1;
+    // eye
+    ctx.fillStyle='#fff';
+    ctx.beginPath();ctx.arc(this.size*0.4,-this.size*0.15,2,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#000';ctx.beginPath();ctx.arc(this.size*0.45,-this.size*0.15,1,0,Math.PI*2);ctx.fill();
+    ctx.restore();
+  }
+}
+
+// init
+resize();
+for(let i=0;i<55;i++) fishes.push(new Fish());
+for(let i=0;i<80;i++) bubbles.push({x:Math.random()*W,y:H+Math.random()*200,r:1+Math.random()*3,s:0.2+Math.random()*0.6});
+
+canvas.addEventListener('pointerdown',()=>{
+  hidingActive=true; hideEnd=performance.now()+3000;
+});
+
+function drawWater(){
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#0a3a5a');
+  g.addColorStop(1,'#001925');
+  ctx.fillStyle=g;
+  ctx.fillRect(0,0,W,H);
+}
+function drawLightRays(t){
+  ctx.save();
+  for(let i=0;i<8;i++){
+    const x=(i+1)*W/9 + Math.sin(t*0.0003+i)*18;
+    ctx.globalAlpha=0.06;
+    ctx.fillStyle='#fff8d6';
+    ctx.beginPath();
+    ctx.moveTo(x-40,0);
+    ctx.lineTo(x+Math.sin(t*0.0002+i)*20, H-bottomH);
+    ctx.lineTo(x+80, H-bottomH);
+    ctx.lineTo(x+40,0);
+    ctx.closePath();ctx.fill();
+  }
+  ctx.restore();
+}
+function drawSand(){
+  ctx.fillStyle='#d9c08a';
+  ctx.fillRect(0,H-bottomH,W,bottomH);
+  ctx.strokeStyle='rgba(0,0,0,0.05)';
+  for(let i=0;i<200;i++){
+    ctx.beginPath();
+    ctx.moveTo((i*123)%W, H-bottomH+Math.random()*bottomH);
+    ctx.lineTo((i*123+50)%W, H-bottomH+Math.random()*bottomH);
+    ctx.stroke();
+  }
+}
+function drawReef(){
+  for(const r of reefs){
+    ctx.fillStyle='#c97a5a';
+    ctx.beginPath();
+    ctx.ellipse(r.x,r.y,r.w,r.h,0,0,Math.PI*2);
+    ctx.fill();
+    // bumps
+    ctx.fillStyle='#e08a6b';
+    for(let i=0;i<5;i++){
+      const bx=r.x+(Math.random()-0.5)*r.w;
+      const by=r.y+Math.random()*r.h*0.8;
+      ctx.beginPath();ctx.arc(bx,by,10+Math.random()*15,0,Math.PI*2);ctx.fill();
+    }
+  }
+}
+function drawBubbles(){
+  ctx.fillStyle='rgba(255,255,255,0.6)';
+  for(const b of bubbles){
+    ctx.beginPath();ctx.arc(b.x,b.y,b.r,0,Math.PI*2);ctx.fill();
+    b.y-=b.s; if(b.y<-10){b.y=H+Math.random()*50;b.x=Math.random()*W;}
+  }
+}
+
+let last=performance.now();
+function loop(now){
+  const dt=now-last; last=now;
+  ctx.clearRect(0,0,W,H);
+  drawWater();
+  drawLightRays(now);
+  drawSand();
+  drawReef();
+  drawBubbles();
+
+  if(hidingActive && now>hideEnd){hidingActive=false;}
+  for(const f of fishes){f.update(fishes);}
+  for(const f of fishes){f.draw();}
+
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
